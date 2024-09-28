@@ -23,41 +23,108 @@
  */
 
 #include "AutoLayoutNode.h"
-#include <memory>
-#include <glog/logging.h>
+#include "RNOH/arkui/NativeNodeApi.h"
 
 namespace rnoh {
 
 AutoLayoutNode::AutoLayoutNode()
-    : ArkUINode(NativeNodeApi::getInstance()->createNode(ArkUI_NodeType::ARKUI_NODE_STACK)) {
-    maybeThrow(NativeNodeApi::getInstance()->registerNodeEvent(m_nodeHandle, NODE_EVENT_ON_APPEAR, 0, this));
+    : ArkUINode(NativeNodeApi::getInstance()->createNode(ArkUI_NodeType::ARKUI_NODE_CUSTOM)),
+      m_autoLayoutNodeDelegate(nullptr) {
+    userCallback_ = new AutoLayoutNodeCallback();
+    userCallback_->callback = [this](ArkUI_NodeCustomEvent *event) {
+        auto type = OH_ArkUI_NodeCustomEvent_GetEventType(event);
+        switch (type) {
+        case ARKUI_NODE_CUSTOM_EVENT_ON_DRAW:
+            // trigger auto-layout in customNode onDraw
+            m_autoLayoutNodeDelegate->customNodeOnDraw();
+        case ARKUI_NODE_CUSTOM_EVENT_ON_MEASURE:
+            onMeasure();
+        case ARKUI_NODE_CUSTOM_EVENT_ON_LAYOUT:
+            onLayout();
+        default:
+            break;
+        }
+    };
+    eventReceiver = [](ArkUI_NodeCustomEvent *event) {
+        auto *userData = reinterpret_cast<AutoLayoutNodeCallback *>(OH_ArkUI_NodeCustomEvent_GetUserData(event));
+        int32_t tagId = OH_ArkUI_NodeCustomEvent_GetEventTargetId(event);
+        if (userData && (tagId == 91 || tagId == 92 || tagId == 93)) {
+            userData->callback(event);
+        }
+    };
+    maybeThrow(NativeNodeApi::getInstance()->addNodeCustomEventReceiver(m_nodeHandle, eventReceiver));
+    maybeThrow(NativeNodeApi::getInstance()->registerNodeCustomEvent(m_nodeHandle, ARKUI_NODE_CUSTOM_EVENT_ON_DRAW, 91,
+                                                                     userCallback_));
+    maybeThrow(NativeNodeApi::getInstance()->registerNodeCustomEvent(m_nodeHandle, ARKUI_NODE_CUSTOM_EVENT_ON_MEASURE,
+                                                                     92, userCallback_));
+    maybeThrow(NativeNodeApi::getInstance()->registerNodeCustomEvent(m_nodeHandle, ARKUI_NODE_CUSTOM_EVENT_ON_LAYOUT,
+                                                                     93, userCallback_));
+}
+
+AutoLayoutNode::~AutoLayoutNode() {
+    NativeNodeApi::getInstance()->unregisterNodeCustomEvent(m_nodeHandle, ARKUI_NODE_CUSTOM_EVENT_ON_DRAW);
+    NativeNodeApi::getInstance()->unregisterNodeCustomEvent(m_nodeHandle, ARKUI_NODE_CUSTOM_EVENT_ON_MEASURE);
+    NativeNodeApi::getInstance()->unregisterNodeCustomEvent(m_nodeHandle, ARKUI_NODE_CUSTOM_EVENT_ON_LAYOUT);
+    NativeNodeApi::getInstance()->removeNodeCustomEventReceiver(m_nodeHandle, eventReceiver);
+    delete userCallback_;
 }
 
 void AutoLayoutNode::insertChild(ArkUINode &child, std::size_t index) {
-    maybeThrow(NativeNodeApi::getInstance()->insertChildAt(m_nodeHandle, child.getArkUINodeHandle(), index));
+    maybeThrow(NativeNodeApi::getInstance()->insertChildAt(m_nodeHandle, child.getArkUINodeHandle(),
+                                                           static_cast<int32_t>(index)));
+}
+
+void AutoLayoutNode::addChild(ArkUINode &child) {
+    maybeThrow(NativeNodeApi::getInstance()->addChild(m_nodeHandle, child.getArkUINodeHandle()));
 }
 
 void AutoLayoutNode::removeChild(ArkUINode &child) {
     maybeThrow(NativeNodeApi::getInstance()->removeChild(m_nodeHandle, child.getArkUINodeHandle()));
 }
 
-void AutoLayoutNode::onNodeEvent(ArkUI_NodeEventType eventType, EventArgs &eventArgs) {
-    if (eventType == ArkUI_NodeEventType::NODE_EVENT_ON_APPEAR) {
-        m_autoLayoutNodeDelegate->onAppear();
-    }
+void AutoLayoutNode::onMeasure() {
+    int32_t width = getSavedWidth();
+    int32_t height = getSavedHeight();
+    maybeThrow(NativeNodeApi::getInstance()->setMeasuredSize(m_nodeHandle, width, height));
 }
 
-void AutoLayoutNode::setAutoLayoutNodeDelegate(AutoLayoutNodeDelegate *scrollNodeDelegate) {
-    m_autoLayoutNodeDelegate = scrollNodeDelegate;
+void AutoLayoutNode::onLayout() {
+    int32_t x = getSavedX();
+    int32_t y = getSavedY();
+    maybeThrow(NativeNodeApi::getInstance()->setMeasuredSize(m_nodeHandle, x, y));
 }
 
-AutoLayoutNode::~AutoLayoutNode() {
-    NativeNodeApi::getInstance()->unregisterNodeEvent(m_nodeHandle, NODE_EVENT_ON_APPEAR);
+void AutoLayoutNode::setAutoLayoutNodeDelegate(AutoLayoutNodeDelegate *autoLayoutNodeDelegate) {
+    m_autoLayoutNodeDelegate = autoLayoutNodeDelegate;
 }
 
-void AutoLayoutNode::setAlign(int32_t align) {
-    ArkUI_NumberValue value[] = {{.i32 = align}};
-    ArkUI_AttributeItem item = {.value = value, .size = 1};
-    maybeThrow(NativeNodeApi::getInstance()->setAttribute(m_nodeHandle, NODE_STACK_ALIGN_CONTENT, &item));
+void AutoLayoutNode::savePosition(int32_t x, int32_t y) {
+    m_x = x;
+    m_y = y;
+};
+
+void AutoLayoutNode::saveLayoutRect(facebook::react::Point const &position, facebook::react::Size const &size,
+                                    facebook::react::Float pointScaleFactor) {
+    ArkUI_NumberValue value[] = {{.i32 = static_cast<int32_t>(position.x * pointScaleFactor + 0.5)},
+                                 {.i32 = static_cast<int32_t>(position.y * pointScaleFactor + 0.5)},
+                                 {.i32 = static_cast<int32_t>(size.width * pointScaleFactor + 0.5)},
+                                 {.i32 = static_cast<int32_t>(size.height * pointScaleFactor + 0.5)}};
+    savePosition(value[0].i32, value[1].i32);
+    saveSize(value[2].i32, value[3].i32);
 }
+
+ArkUINode &AutoLayoutNode::setLayoutRect(facebook::react::Point const &position, facebook::react::Size const &size,
+                                         facebook::react::Float pointScaleFactor) {
+    ArkUI_NumberValue value[] = {{.i32 = static_cast<int32_t>(position.x * pointScaleFactor + 0.5)},
+                                 {.i32 = static_cast<int32_t>(position.y * pointScaleFactor + 0.5)},
+                                 {.i32 = static_cast<int32_t>(size.width * pointScaleFactor + 0.5)},
+                                 {.i32 = static_cast<int32_t>(size.height * pointScaleFactor + 0.5)}};
+    // use save value to adjust position and size
+    savePosition(value[0].i32, value[1].i32);
+    saveSize(value[2].i32, value[3].i32);
+    ArkUI_AttributeItem item = {value, sizeof(value) / sizeof(ArkUI_NumberValue)};
+    maybeThrow(NativeNodeApi::getInstance()->setAttribute(m_nodeHandle, NODE_LAYOUT_RECT, &item));
+    return *this;
+};
+
 } // namespace rnoh

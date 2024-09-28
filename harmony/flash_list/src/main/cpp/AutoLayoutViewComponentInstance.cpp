@@ -24,10 +24,7 @@
 
 #include "AutoLayoutViewComponentInstance.h"
 #include "RNOHCorePackage/ComponentInstances/ViewComponentInstance.h"
-#include "folly/Synchronized.h"
-#include "folly/synchronization/Lock.h"
-#include <mutex>
-#include <sys/param.h>
+#include <react/renderer/debug/SystraceSection.h>
 
 namespace rnoh {
 
@@ -42,40 +39,40 @@ void AutoLayoutViewComponentInstance::onChildInserted(ComponentInstance::Shared 
     m_autoLayoutNode.insertChild(childComponentInstance->getLocalRootArkUINode(), index);
 }
 
-AutoLayoutNode &AutoLayoutViewComponentInstance::getLocalRootArkUINode() { return m_autoLayoutNode; }
-
 void AutoLayoutViewComponentInstance::onChildRemoved(ComponentInstance::Shared const &childComponentInstance) {
     CppComponentInstance::onChildRemoved(childComponentInstance);
     m_autoLayoutNode.removeChild(childComponentInstance->getLocalRootArkUINode());
 };
 
-void AutoLayoutViewComponentInstance::finalizeUpdates() {
-    if (parentScrollView != nullptr) {
-        onAppear();
+AutoLayoutNode &AutoLayoutViewComponentInstance::getLocalRootArkUINode() { return m_autoLayoutNode; }
+
+void AutoLayoutViewComponentInstance::onFinalizeUpdates() { DLOG(INFO) << "[FlashList] finalizeUpdates()"; }
+
+void AutoLayoutViewComponentInstance::onPropsChanged(SharedConcreteProps const &props) {
+    CppComponentInstance::onPropsChanged(props);
+    horizontal = props->horizontal;
+    alShadow.horizontal = props->horizontal;
+    if (m_props || alShadow.scrollOffset != props->scrollOffset) {
+        alShadow.scrollOffset = props->scrollOffset;
     }
-    ComponentInstance::finalizeUpdates();
+    if (m_props || alShadow.windowSize != props->windowSize) {
+        alShadow.windowSize = props->windowSize;
+    }
+    alShadow.renderOffset = props->renderAheadOffset;
+    enableInstrumentation = props->enableInstrumentation;
+    disableAutoLayout = props->disableAutoLayout;
 }
 
-facebook::react::Float AutoLayoutViewComponentInstance::getLeft() { return m_layoutMetrics.frame.origin.x; }
-facebook::react::Float AutoLayoutViewComponentInstance::getTop() { return m_layoutMetrics.frame.origin.y; }
-facebook::react::Float AutoLayoutViewComponentInstance::getRight() {
-    return m_layoutMetrics.frame.origin.x + m_layoutMetrics.frame.size.width;
-}
-facebook::react::Float AutoLayoutViewComponentInstance::getBottom() {
-    return m_layoutMetrics.frame.origin.y + m_layoutMetrics.frame.size.height;
-}
-facebook::react::Float AutoLayoutViewComponentInstance::getHeight() { return m_layoutMetrics.frame.size.height; }
-facebook::react::Float AutoLayoutViewComponentInstance::getWidth() { return m_layoutMetrics.frame.size.width; }
-
-void AutoLayoutViewComponentInstance::onAppear() {
+void AutoLayoutViewComponentInstance::onDispatchDraw() {
+    facebook::react::SystraceSection s("AutoLayoutViewComponentInstance::onDispatchDraw");
     fixLayout();
     fixFooter();
-    getLocalRootArkUINode().markDirty();
 
-    parentScrollView = getParentScrollView();
+    m_parentScrollView = getParentScrollView();
+    auto parentScrollView = m_parentScrollView.lock();
     if (enableInstrumentation && parentScrollView != nullptr) {
-        auto scrollContainerSize = alShadow.horizontal ? parentScrollView->getLayoutMetrics().frame.size.width
-                                                       : parentScrollView->getLayoutMetrics().frame.size.height;
+        auto scrollContainerSize = alShadow.horizontal ? parentScrollView->getScrollViewMetrics().containerSize.width
+                                                       : parentScrollView->getScrollViewMetrics().containerSize.height;
         auto currentScrollOffset = alShadow.horizontal ? parentScrollView->getScrollViewMetrics().contentOffset.x
                                                        : parentScrollView->getScrollViewMetrics().contentOffset.y;
 
@@ -90,17 +87,16 @@ void AutoLayoutViewComponentInstance::onAppear() {
     }
 }
 
-void AutoLayoutViewComponentInstance::onPropsChanged(SharedConcreteProps const &props) {
-    CppComponentInstance::onPropsChanged(props);
-    horizontal = props->horizontal;
-    alShadow.horizontal = props->horizontal;
-    alShadow.scrollOffset = props->scrollOffset;
-    alShadow.windowSize = props->windowSize;
-    alShadow.renderOffset = props->renderAheadOffset;
-    enableInstrumentation = props->enableInstrumentation;
-    disableAutoLayout = props->disableAutoLayout;
-    if (parentScrollView != nullptr) {
-        onAppear();
+/** debug log function */
+void printChildrenView(const std::vector<rnoh::CellContainerComponentInstance::Shared> &childrenView) {
+    for (const auto &cell : childrenView) {
+        if (cell) {
+            LOG(INFO) << "[FlashList-cell print] cell index: " << cell->getIndex() << ", x: " << cell->getLeft()
+                      << ", y: " << cell->getTop() << ", height: " << cell->getHeight()
+                      << ", width: " << cell->getWidth();
+        } else {
+            LOG(INFO) << "[FlashList-cell print] Null pointer encountered in childrenView." << std::endl;
+        }
     }
 }
 
@@ -109,15 +105,17 @@ void AutoLayoutViewComponentInstance::onPropsChanged(SharedConcreteProps const &
  * a non issue.*/
 void AutoLayoutViewComponentInstance::fixLayout() {
     auto children = getChildren();
+    DLOG(INFO) << "[FlashList-fixLayout] children.size(): " << children.size();
     if (children.size() > 1 && !disableAutoLayout) {
         std::vector<rnoh::CellContainerComponentInstance::Shared> childrenView;
-        for (int i = 0; i < children.size(); i++) {
-            auto cell = std::dynamic_pointer_cast<rnoh::CellContainerComponentInstance>(children[i]);
-            childrenView.push_back(cell);
+        childrenView.reserve(children.size()); // Pre allocated space
+        for (const auto &child : children) {
+            if (auto cell = std::dynamic_pointer_cast<rnoh::CellContainerComponentInstance>(child)) {
+                childrenView.push_back(cell);
+            }
         }
         std::sort(childrenView.begin(), childrenView.end(),
                   [](auto &a, auto &b) { return a->getIndex() < b->getIndex(); });
-
         alShadow.offsetFromStart = alShadow.horizontal ? getLeft() : getTop();
         alShadow.clearGapsAndOverlaps(childrenView);
     }
@@ -125,13 +123,15 @@ void AutoLayoutViewComponentInstance::fixLayout() {
 
 /** Fixes footer position along with rest of the items */
 void AutoLayoutViewComponentInstance::fixFooter() {
-    parentScrollView = getParentScrollView();
+    m_parentScrollView = getParentScrollView();
+    auto parentScrollView = m_parentScrollView.lock();
     if (disableAutoLayout || parentScrollView == nullptr) {
         return;
     }
+    // Compare with scrollView contentSize to see if footer is visible
     auto isAutoLayoutEndVisible = alShadow.horizontal
-                                      ? getRight() <= parentScrollView->getLayoutMetrics().frame.size.width
-                                      : getBottom() <= parentScrollView->getLayoutMetrics().frame.size.height;
+                                      ? getRight() <= parentScrollView->getScrollViewMetrics().contentSize.width
+                                      : getBottom() <= parentScrollView->getScrollViewMetrics().contentSize.height;
     if (!isAutoLayoutEndVisible) {
         return;
     }
@@ -141,28 +141,45 @@ void AutoLayoutViewComponentInstance::fixFooter() {
     if (diff == 0 || footer == nullptr || autoLayoutParent == nullptr) {
         return;
     }
+    // Save the adjusted layout to fix footer
     if (alShadow.horizontal) {
         auto footerLayoutMetrics = footer->getLayoutMetrics();
         footerLayoutMetrics.frame.origin.x += diff;
-        footer->setLayout(footerLayoutMetrics);
+        footer->setLeft(getLeft() + diff);
+        footer->getLocalRootArkUINode().saveLayoutRect(footerLayoutMetrics.frame.origin, footerLayoutMetrics.frame.size,
+                                                       footerLayoutMetrics.pointScaleFactor);
 
         m_layoutMetrics.frame.size.width += diff;
-        setLayout(m_layoutMetrics);
+        getLocalRootArkUINode().saveLayoutRect(m_layoutMetrics.frame.origin, m_layoutMetrics.frame.size,
+                                               m_layoutMetrics.pointScaleFactor);
 
         auto parentLayoutMetrics = autoLayoutParent->getLayoutMetrics();
         parentLayoutMetrics.frame.size.width += diff;
-        autoLayoutParent->setLayout(parentLayoutMetrics);
+        auto parentWidth =
+            static_cast<int32_t>(parentLayoutMetrics.frame.size.width * parentLayoutMetrics.pointScaleFactor + 0.5);
+        auto parentHeight =
+            static_cast<int32_t>(parentLayoutMetrics.frame.size.height * parentLayoutMetrics.pointScaleFactor + 0.5);
+
+        autoLayoutParent->getLocalRootArkUINode().saveSize(parentWidth, parentHeight);
+
     } else {
         auto footerLayoutMetrics = footer->getLayoutMetrics();
         footerLayoutMetrics.frame.origin.y += diff;
-        footer->setLayout(footerLayoutMetrics);
+        footer->setTop(getTop() + diff);
+        footer->getLocalRootArkUINode().saveLayoutRect(footerLayoutMetrics.frame.origin, footerLayoutMetrics.frame.size,
+                                                       footerLayoutMetrics.pointScaleFactor);
 
         m_layoutMetrics.frame.size.height += diff;
-        setLayout(m_layoutMetrics);
+        getLocalRootArkUINode().saveLayoutRect(m_layoutMetrics.frame.origin, m_layoutMetrics.frame.size,
+                                               m_layoutMetrics.pointScaleFactor);
 
         auto parentLayoutMetrics = autoLayoutParent->getLayoutMetrics();
         parentLayoutMetrics.frame.size.height += diff;
-        autoLayoutParent->setLayout(parentLayoutMetrics);
+        auto parentWidth =
+            static_cast<int32_t>(parentLayoutMetrics.frame.size.width * parentLayoutMetrics.pointScaleFactor + 0.5);
+        auto parentHeight =
+            static_cast<int32_t>(parentLayoutMetrics.frame.size.height * parentLayoutMetrics.pointScaleFactor + 0.5);
+        autoLayoutParent->getLocalRootArkUINode().saveSize(parentWidth, parentHeight);
     }
 }
 
@@ -178,10 +195,16 @@ facebook::react::Float AutoLayoutViewComponentInstance::getFooterDiff() {
 }
 
 std::shared_ptr<rnoh::CellContainerComponentInstance> AutoLayoutViewComponentInstance::getFooter() {
-    for (auto const child : getChildren()) {
-        auto childInstance = std::dynamic_pointer_cast<rnoh::CellContainerComponentInstance>(child);
-        if (childInstance != nullptr && childInstance->getIndex() == -1) {
-            return childInstance;
+    auto parent = getParent().lock();
+    if (!parent) {
+        return nullptr;
+    }
+    for (const auto &child : parent->getChildren()) {
+        if (auto childInstance = std::dynamic_pointer_cast<rnoh::CellContainerComponentInstance>(child)) {
+            // footer index is -1
+            if (childInstance->getIndex() == -1) {
+                return childInstance;
+            }
         }
     }
     return nullptr;
@@ -205,4 +228,16 @@ void AutoLayoutViewComponentInstance::emitBlankAreaEvent() {
     blankAreaEvent.offsetEnd = alShadow.blankOffsetAtEnd / pixelDensity;
     m_eventEmitter->onBlankAreaEvent(blankAreaEvent);
 }
+
+facebook::react::Float AutoLayoutViewComponentInstance::getLeft() { return m_layoutMetrics.frame.origin.x; }
+facebook::react::Float AutoLayoutViewComponentInstance::getTop() { return m_layoutMetrics.frame.origin.y; }
+facebook::react::Float AutoLayoutViewComponentInstance::getRight() {
+    return m_layoutMetrics.frame.origin.x + m_layoutMetrics.frame.size.width;
+}
+facebook::react::Float AutoLayoutViewComponentInstance::getBottom() {
+    return m_layoutMetrics.frame.origin.y + m_layoutMetrics.frame.size.height;
+}
+facebook::react::Float AutoLayoutViewComponentInstance::getHeight() { return m_layoutMetrics.frame.size.height; }
+facebook::react::Float AutoLayoutViewComponentInstance::getWidth() { return m_layoutMetrics.frame.size.width; }
+
 } // namespace rnoh

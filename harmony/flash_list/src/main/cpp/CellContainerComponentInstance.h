@@ -23,25 +23,24 @@
  */
 
 #pragma once
+
 #include "RNOH/CppComponentInstance.h"
 #include "ShadowNodes.h"
-#include "FlashListStackNode.h"
+#include "CellNode.h"
 
 namespace rnoh {
 class CellContainerComponentInstance : public CppComponentInstance<facebook::react::CellContainerShadowNode> {
 private:
-    FlashListStackNode m_stackNode;
-    int index{-1};
+    CellNode m_cellNode;
+    int m_index{-1};
 
 public:
     using Shared = std::shared_ptr<CellContainerComponentInstance>;
     CellContainerComponentInstance(Context context);
-
     void onChildInserted(ComponentInstance::Shared const &childComponentInstance, std::size_t index) override;
-
     void onChildRemoved(ComponentInstance::Shared const &childComponentInstance) override;
-
-    FlashListStackNode &getLocalRootArkUINode() override;
+    CellNode &getLocalRootArkUINode() override;
+    void onPropsChanged(SharedConcreteProps const &props) override;
 
     void setIndex(int const &);
     int getIndex();
@@ -58,7 +57,5 @@ public:
     facebook::react::Float getHeight();
     void setWidth(facebook::react::Float const &);
     facebook::react::Float getWidth();
-
-    void onPropsChanged(SharedConcreteProps const &props) override;
 };
 } // namespace rnoh

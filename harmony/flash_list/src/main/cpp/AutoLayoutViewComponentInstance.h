@@ -22,8 +22,7 @@
  * SOFTWARE.
  */
 
-#ifndef HARMONY_AUTOLAYOUTVIEWCOMPONENTINSTANCE_H
-#define HARMONY_AUTOLAYOUTVIEWCOMPONENTINSTANCE_H
+#pragma once
 
 #include "RNOH/CppComponentInstance.h"
 #include "RNOHCorePackage/ComponentInstances/ScrollViewComponentInstance.h"
@@ -41,38 +40,34 @@ private:
 
     bool enableInstrumentation{false};
     bool disableAutoLayout{false};
-    Float pixelDensity{1.0};
+    Float pixelDensity{m_layoutMetrics.pointScaleFactor};
 
-    std::shared_ptr<rnoh::ScrollViewComponentInstance> parentScrollView;
+    std::weak_ptr<rnoh::ScrollViewComponentInstance> m_parentScrollView;
+
+protected:
+    void fixLayout();
+    void fixFooter();
+    facebook::react::Float getFooterDiff();
+    void onDispatchDraw() override;
+    void customNodeOnDraw() override {
+        onDispatchDraw();
+    };
+    std::shared_ptr<rnoh::CellContainerComponentInstance> getFooter();
+    std::shared_ptr<rnoh::ScrollViewComponentInstance> getParentScrollView();
+    void emitBlankAreaEvent() override;
 
 public:
     AutoLayoutViewComponentInstance(Context context);
-
     void onChildInserted(ComponentInstance::Shared const &childComponentInstance, std::size_t index) override;
-
     void onChildRemoved(ComponentInstance::Shared const &childComponentInstance) override;
-
     AutoLayoutNode &getLocalRootArkUINode() override;
-
     void onPropsChanged(SharedConcreteProps const &props) override;
-    void getNapiProps(facebook::react::Props::Shared props);
-    void finalizeUpdates() override;
-
+    void onFinalizeUpdates() override;
     facebook::react::Float getLeft();
     facebook::react::Float getTop();
     facebook::react::Float getRight();
     facebook::react::Float getBottom();
     facebook::react::Float getHeight();
     facebook::react::Float getWidth();
-
-    void fixLayout();
-    void fixFooter();
-    facebook::react::Float getFooterDiff();
-    void onAppear() override;
-    std::shared_ptr<rnoh::CellContainerComponentInstance> getFooter();
-    std::shared_ptr<rnoh::ScrollViewComponentInstance> getParentScrollView();
-    void emitBlankAreaEvent() override;
 };
 } // namespace rnoh
-
-#endif // HARMONY_AUTOLAYOUTVIEWCOMPONENTINSTANCE_H

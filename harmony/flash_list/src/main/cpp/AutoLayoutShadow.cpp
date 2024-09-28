@@ -24,16 +24,16 @@
 
 #include <react/renderer/components/view/ViewProps.h>
 #include <glog/logging.h>
-#include <sys/param.h>
-#include <thread>
 #include "AutoLayoutShadow.h"
+#include <react/renderer/debug/SystraceSection.h>
 
 namespace rnoh {
 
-/**checks for overlaps or gaps.between adjacent items and then applies a correction (Only Grid layouts with varying
+/** Checks for overlaps or gaps.between adjacent items and then applies a correction (Only Grid layouts with varying
  * spans) Performance: RecyclerListView renders very small number of views and this is not going to trigger multiple
  * layouts on Android side. Not expecting any major perf issu.*/
 void AutoLayoutShadow::clearGapsAndOverlaps(std::vector<CellContainerComponentInstance::Shared> sortedItems) {
+    facebook::react::SystraceSection s("AutoLayoutShadow::clearGapsAndOverlaps");
     if (sortedItems.empty()) {
         return;
     }
@@ -46,7 +46,7 @@ void AutoLayoutShadow::clearGapsAndOverlaps(std::vector<CellContainerComponentIn
         auto neighbour = sortedItems[i + 1];
         // Only apply correction if the next cell is consecutive.
         bool isNeighbourConsecutive = neighbour->getIndex() == cell->getIndex() + 1;
-        if (isWithinBounds(*cell)) {
+        if (isWithinBounds(*cell) || isWithinBounds(*neighbour)) {
             if (!horizontal) {
                 maxBound = MAX(maxBound, cell->getBottom());
                 minBound = MIN(minBound, cell->getTop());
@@ -100,8 +100,17 @@ void AutoLayoutShadow::clearGapsAndOverlaps(std::vector<CellContainerComponentIn
             lastMaxBoundOverall = MAX(lastMaxBoundOverall, cell->getBottom());
             lastMaxBoundOverall = MAX(lastMaxBoundOverall, neighbour->getBottom());
         }
-        cell->setLayout(cell->getLayoutMetrics());
-        neighbour->setLayout(neighbour->getLayoutMetrics());
+        DLOG(INFO) << "[FlashList-clearGapsAndOverlaps] cell x: " << cell->getLeft() << ", y: " << cell->getTop()
+                   << ", height: " << cell->getHeight() << ", width: " << cell->getWidth();
+        DLOG(INFO) << "[FlashList-clearGapsAndOverlaps] neighbour x: " << neighbour->getLeft()
+                   << ", y: " << neighbour->getTop() << ", height: " << neighbour->getHeight()
+                   << ", width: " << neighbour->getWidth();
+        cell->getLocalRootArkUINode().saveLayoutRect(cell->getLayoutMetrics().frame.origin,
+                                                     cell->getLayoutMetrics().frame.size,
+                                                     cell->getLayoutMetrics().pointScaleFactor);
+        neighbour->getLocalRootArkUINode().saveLayoutRect(neighbour->getLayoutMetrics().frame.origin,
+                                                          neighbour->getLayoutMetrics().frame.size,
+                                                          neighbour->getLayoutMetrics().pointScaleFactor);
     }
     lastMaxBound = maxBoundNeighbour;
     lastMinBound = minBound;
@@ -116,7 +125,7 @@ Float AutoLayoutShadow::computeBlankFromGivenOffset(Float actualScrollOffset, Fl
     return MAX(blankOffsetAtStart, blankOffsetAtEnd);
 }
 
-/**It's importance to aviod correcting views outside the render window. An item that isn't being recycled might
+/** It's importance to aviod correcting views outside the render window. An item that isn't being recycled might
  * still remain in the view tree. If views outside get considered then gaps between unused items will cause
  * algorithm to fail.*/
 bool AutoLayoutShadow::isWithinBounds(CellContainerComponentInstance &cell) {

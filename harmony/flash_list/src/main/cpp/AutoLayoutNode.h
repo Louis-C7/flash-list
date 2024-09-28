@@ -25,15 +25,19 @@
 #pragma once
 
 #include "RNOH/arkui/ArkUINode.h"
-#include "RNOH/arkui/NativeNodeApi.h"
 
 namespace rnoh {
+
+struct AutoLayoutNodeCallback {
+  std::function<void(ArkUI_NodeCustomEvent* event)> callback;
+};
 
 class AutoLayoutNodeDelegate {
 public:
     virtual ~AutoLayoutNodeDelegate() = default;
-    virtual void onAppear(){};
+    virtual void onDispatchDraw(){};
     virtual void emitBlankAreaEvent(){};
+    virtual void customNodeOnDraw(){};
 };
 
 class AutoLayoutNode : public ArkUINode {
@@ -45,10 +49,23 @@ public:
     ~AutoLayoutNode() override;
 
     void insertChild(ArkUINode &child, std::size_t index);
+    void addChild(ArkUINode &child);
     void removeChild(ArkUINode &child);
-    void onNodeEvent(ArkUI_NodeEventType eventType, EventArgs &eventArgs) override;
+    void onMeasure();
+    void onLayout();
     void setAutoLayoutNodeDelegate(AutoLayoutNodeDelegate *autoLayoutNodeDelegate);
-    void setAlign(int32_t align);
-};
+    void savePosition(int32_t x, int32_t y);
+    int32_t getSavedX() { return m_x; };
+    int32_t getSavedY() { return m_y; };
+    void saveLayoutRect(facebook::react::Point const &position, facebook::react::Size const &size,
+                        facebook::react::Float pointScaleFactor);
+    ArkUINode &setLayoutRect(facebook::react::Point const &position, facebook::react::Size const &size,
+                             facebook::react::Float pointScaleFactor) override;
 
+private:
+    AutoLayoutNodeCallback *userCallback_ = nullptr;
+    void (*eventReceiver)(ArkUI_NodeCustomEvent *event);
+    int32_t m_x;
+    int32_t m_y;
+};
 } // namespace rnoh

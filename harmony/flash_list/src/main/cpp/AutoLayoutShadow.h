@@ -22,16 +22,8 @@
  * SOFTWARE.
  */
 
-//
-// Created on 5/3/2024.
-//
-// Node APIs are not fully supported. To solve the compilation error of the interface cannot be found,
-// please include "napi/native_api.h".
+#pragma once
 
-#ifndef HARMONY_AUTOLAYOUTSHADOW_H
-#define HARMONY_AUTOLAYOUTSHADOW_H
-
-#include "react/renderer/graphics/Float.h"
 #include "CellContainerComponentInstance.h"
 
 using namespace facebook;
@@ -62,5 +54,3 @@ public:
                                       Float distanceFromWindowEnd);
 };
 } // namespace rnoh
-
-#endif // HARMONY_AUTOLAYOUTSHADOW_H
